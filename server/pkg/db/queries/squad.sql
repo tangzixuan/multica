@@ -1,0 +1,73 @@
+-- name: CreateSquad :one
+INSERT INTO squad (workspace_id, name, description, leader_id, creator_id)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING *;
+
+-- name: GetSquad :one
+SELECT * FROM squad WHERE id = $1;
+
+-- name: GetSquadInWorkspace :one
+SELECT * FROM squad WHERE id = $1 AND workspace_id = $2;
+
+-- name: ListSquads :many
+SELECT * FROM squad WHERE workspace_id = $1 ORDER BY created_at ASC;
+
+-- name: UpdateSquad :one
+UPDATE squad SET
+    name = COALESCE(sqlc.narg('name'), name),
+    description = COALESCE(sqlc.narg('description'), description),
+    leader_id = COALESCE(sqlc.narg('leader_id'), leader_id),
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: DeleteSquad :exec
+DELETE FROM squad WHERE id = $1;
+
+-- name: AddSquadMember :one
+INSERT INTO squad_member (squad_id, member_type, member_id, role)
+VALUES ($1, $2, $3, $4)
+RETURNING *;
+
+-- name: RemoveSquadMember :exec
+DELETE FROM squad_member
+WHERE squad_id = $1 AND member_type = $2 AND member_id = $3;
+
+-- name: ListSquadMembers :many
+SELECT * FROM squad_member WHERE squad_id = $1 ORDER BY created_at ASC;
+
+-- name: UpdateSquadMemberRole :one
+UPDATE squad_member SET role = $4
+WHERE squad_id = $1 AND member_type = $2 AND member_id = $3
+RETURNING *;
+
+-- name: IsSquadMember :one
+SELECT EXISTS(
+    SELECT 1 FROM squad_member
+    WHERE squad_id = $1 AND member_type = $2 AND member_id = $3
+) AS is_member;
+
+-- name: CountSquadMembers :one
+SELECT count(*) FROM squad_member WHERE squad_id = $1;
+
+-- name: GetSquadByAssignee :one
+-- Look up the squad when an issue is assigned to a squad.
+SELECT s.* FROM squad s WHERE s.id = $1 AND s.workspace_id = $2;
+
+-- name: ListSquadsByMember :many
+-- Find all squads a given entity belongs to in a workspace.
+SELECT s.* FROM squad s
+JOIN squad_member sm ON sm.squad_id = s.id
+WHERE s.workspace_id = $1 AND sm.member_type = $2 AND sm.member_id = $3
+ORDER BY s.created_at ASC;
+
+-- name: CreateSquadActivityLog :one
+INSERT INTO squad_activity_log (squad_id, issue_id, trigger_comment_id, leader_id, outcome, details)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING *;
+
+-- name: ListSquadActivityLogs :many
+SELECT * FROM squad_activity_log
+WHERE issue_id = $1
+ORDER BY created_at DESC
+LIMIT $2;

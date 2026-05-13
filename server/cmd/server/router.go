@@ -391,6 +391,25 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
+			// Squads
+			r.Route("/api/squads", func(r chi.Router) {
+				r.Get("/", h.ListSquads)
+				r.Post("/", h.CreateSquad)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetSquad)
+					r.Put("/", h.UpdateSquad)
+					r.Delete("/", h.DeleteSquad)
+					r.Get("/members", h.ListSquadMembers)
+					r.Post("/members", h.AddSquadMember)
+					r.Delete("/members", h.RemoveSquadMember)
+					r.Patch("/members/role", h.UpdateSquadMemberRole)
+				})
+			})
+
+			// Squad activity logs (per issue)
+			r.Get("/api/issues/{issueId}/squad-activity", h.ListSquadActivityLogs)
+			r.Post("/api/squad-activity", h.CreateSquadActivityLog)
+
 			// Autopilots
 			r.Route("/api/autopilots", func(r chi.Router) {
 				r.Get("/", h.ListAutopilots)
