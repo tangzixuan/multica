@@ -3,10 +3,12 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -69,6 +71,23 @@ func squadMemberToResponse(m db.SquadMember) SquadMemberResponse {
 	}
 }
 
+func squadRowToResponse(row db.ListSquadsWithMemberCountRow) SquadResponse {
+	return SquadResponse{
+		ID:           uuidToString(row.ID),
+		WorkspaceID:  uuidToString(row.WorkspaceID),
+		Name:         row.Name,
+		Description:  row.Description,
+		Instructions: row.Instructions,
+		AvatarURL:    textToPtr(row.AvatarUrl),
+		LeaderID:     uuidToString(row.LeaderID),
+		CreatorID:    uuidToString(row.CreatorID),
+		CreatedAt:    timestampToString(row.CreatedAt),
+		UpdatedAt:    timestampToString(row.UpdatedAt),
+		ArchivedAt:   timestampToPtr(row.ArchivedAt),
+		ArchivedBy:   uuidToPtr(row.ArchivedBy),
+	}
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 // loadSquadInWorkspace loads a squad scoped to the current workspace.
@@ -102,7 +121,7 @@ func (h *Handler) ListSquads(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	squads, err := h.Queries.ListSquads(r.Context(), wsUUID)
+	rows, err := h.Queries.ListSquadsWithMemberCount(r.Context(), wsUUID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list squads")
 		return
@@ -113,13 +132,10 @@ func (h *Handler) ListSquads(w http.ResponseWriter, r *http.Request) {
 		MemberCount int64 `json:"member_count"`
 	}
 
-	resp := make([]squadListItem, len(squads))
-	for i, s := range squads {
-		resp[i].SquadResponse = squadToResponse(s)
-		count, err := h.Queries.CountSquadMembers(r.Context(), s.ID)
-		if err == nil {
-			resp[i].MemberCount = count
-		}
+	resp := make([]squadListItem, len(rows))
+	for i, row := range rows {
+		resp[i].SquadResponse = squadRowToResponse(row)
+		resp[i].MemberCount = row.MemberCount
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -490,6 +506,15 @@ func (h *Handler) UpdateSquadMemberRole(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if req.MemberType != "agent" && req.MemberType != "member" {
+		writeError(w, http.StatusBadRequest, "member_type must be agent or member")
+		return
+	}
+	if req.Role == "" {
+		writeError(w, http.StatusBadRequest, "role is required")
+		return
+	}
+
 	sm, err := h.Queries.UpdateSquadMemberRole(r.Context(), db.UpdateSquadMemberRoleParams{
 		SquadID:    squad.ID,
 		MemberType: req.MemberType,
@@ -497,7 +522,11 @@ func (h *Handler) UpdateSquadMemberRole(w http.ResponseWriter, r *http.Request) 
 		Role:       req.Role,
 	})
 	if err != nil {
-		writeError(w, http.StatusNotFound, "squad member not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "squad member not found")
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to update squad member role")
+		}
 		return
 	}
 
