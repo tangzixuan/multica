@@ -263,7 +263,6 @@ export function SquadDetailPage() {
           runtimesLoading={runtimesLoading}
           members={wsMembers}
           currentUserId={currentUser?.id ?? null}
-          existingAgentNames={agents.map((a: Agent) => a.name)}
           squadId={squadId}
           onClose={() => setShowCreateAgent(false)}
           onCreate={handleCreateAgent}
