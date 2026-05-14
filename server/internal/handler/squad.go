@@ -107,9 +107,19 @@ func (h *Handler) ListSquads(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list squads")
 		return
 	}
-	resp := make([]SquadResponse, len(squads))
+
+	type squadListItem struct {
+		SquadResponse
+		MemberCount int64 `json:"member_count"`
+	}
+
+	resp := make([]squadListItem, len(squads))
 	for i, s := range squads {
-		resp[i] = squadToResponse(s)
+		resp[i].SquadResponse = squadToResponse(s)
+		count, err := h.Queries.CountSquadMembers(r.Context(), s.ID)
+		if err == nil {
+			resp[i].MemberCount = count
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
