@@ -84,6 +84,11 @@ type Manager struct {
 	mu       sync.Mutex
 	sessions map[string]*PtySession
 	closed   bool
+	// closeDone is closed by the first Close() caller AFTER finalize
+	// finishes (every session deregistered, Done() closed). Subsequent
+	// concurrent callers wait on it instead of racing past, so all
+	// Close() returns share the same "manager fully drained" guarantee.
+	closeDone chan struct{}
 }
 
 // NewManager constructs a Manager. lookup may be nil in tests that only
@@ -104,9 +109,10 @@ func NewManager(cfg ManagerConfig, lookup TaskLookup) *Manager {
 		cfg.Logger = slog.Default()
 	}
 	return &Manager{
-		cfg:      cfg,
-		lookup:   lookup,
-		sessions: make(map[string]*PtySession),
+		cfg:       cfg,
+		lookup:    lookup,
+		sessions:  make(map[string]*PtySession),
+		closeDone: make(chan struct{}),
 	}
 }
 
@@ -183,6 +189,12 @@ func (m *Manager) Open(ctx context.Context, p OpenParams) (*PtySession, error) {
 	if m.closed {
 		m.mu.Unlock()
 		_ = pty.Close()
+		// We won that race: spawn succeeded but the manager closed before
+		// we could register the session, so waitLoop never runs. Reap the
+		// child synchronously here — pty.Close fires SIGHUP/SIGKILL but
+		// only Wait() collects the exit status, otherwise the unix child
+		// stays around as a zombie until the daemon process dies.
+		_, _ = pty.Wait()
 		return nil, ErrManagerClosed
 	}
 	m.sessions[sess.id] = sess
@@ -215,10 +227,17 @@ func (m *Manager) Sessions() []string {
 }
 
 // Close tears down every live session and refuses subsequent Open calls.
+// Safe to call concurrently from multiple goroutines: the first caller
+// runs the actual teardown, the rest block on closeDone until that
+// teardown is fully observable. Every Close() return — first or Nth —
+// thus carries the same "manager drained, every session finalized"
+// guarantee that downstream GC/audit cleanup depends on.
 func (m *Manager) Close() {
 	m.mu.Lock()
 	if m.closed {
+		done := m.closeDone
 		m.mu.Unlock()
+		<-done
 		return
 	}
 	m.closed = true
@@ -243,6 +262,7 @@ func (m *Manager) Close() {
 		}(s)
 	}
 	wg.Wait()
+	close(m.closeDone)
 }
 
 // CheckIdle walks every session and closes those whose idle interval

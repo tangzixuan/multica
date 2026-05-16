@@ -37,6 +37,10 @@ type fakePTY struct {
 	exitCode  int32
 	resizedCh chan [2]uint16
 	closed    atomic.Bool
+	// waitCount tracks how many times Wait() was invoked. Lets tests
+	// assert the cleanup path reaped the child even when no session was
+	// ever registered (Manager.Close racing Open).
+	waitCount atomic.Int32
 }
 
 func newFakePTY(t *testing.T, cols, rows uint16) *fakePTY {
@@ -91,6 +95,7 @@ func (p *fakePTY) Resize(cols, rows uint16) error {
 }
 
 func (p *fakePTY) Wait() (int, error) {
+	p.waitCount.Add(1)
 	<-p.waitDone
 	if p.waitDelay > 0 {
 		time.Sleep(p.waitDelay)
@@ -648,6 +653,109 @@ func TestSession_DoneFiresAfterDeregister(t *testing.T) {
 
 	if _, err := f.mgr.Get(id); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("Get after <-Done() = %v, want ErrSessionNotFound (finalize order violated)", err)
+	}
+}
+
+func TestManager_CloseConcurrentReentryWaitsForFinalize(t *testing.T) {
+	// Regression for Round 3 review: a late Close() caller used to return
+	// immediately when it saw m.closed==true, even though the first caller
+	// was still in the middle of waiting for each session's Done(). That
+	// broke the "Manager.Close returning means everything is drained"
+	// contract for every caller but the first. With closeDone, all callers
+	// now share the same finalize barrier.
+	f := newFixture(t)
+	f.spawner.make = func(tt *testing.T, req SpawnRequest) (*fakePTY, error) {
+		p := newFakePTY(tt, req.Cols, req.Rows)
+		// Long enough that the second goroutine's Close call definitely
+		// observes the first one mid-flight rather than already-finished.
+		p.waitDelay = 200 * time.Millisecond
+		return p, nil
+	}
+
+	s1, err := f.mgr.Open(context.Background(), OpenParams{TaskID: "task-1", WorkspaceID: "ws-A"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	const callers = 4
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	sessionsAfter := make([]int, callers)
+	doneClosed := make([]bool, callers)
+	for i := 0; i < callers; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			f.mgr.Close()
+			sessionsAfter[i] = len(f.mgr.Sessions())
+			select {
+			case <-s1.Done():
+				doneClosed[i] = true
+			default:
+				doneClosed[i] = false
+			}
+		}()
+	}
+	wg.Wait()
+
+	for i := 0; i < callers; i++ {
+		if sessionsAfter[i] != 0 {
+			t.Errorf("caller %d: Sessions() after Close = %d, want 0", i, sessionsAfter[i])
+		}
+		if !doneClosed[i] {
+			t.Errorf("caller %d: session Done not closed when Close returned", i)
+		}
+	}
+}
+
+func TestManager_OpenAfterCloseReapsSpawnedPTY(t *testing.T) {
+	// Regression for Round 3 review: Manager.Open's cleanup path used to
+	// only call pty.Close() when it lost the race with Manager.Close —
+	// no Wait(), so on a real unix PTY the killed child stayed as a zombie
+	// (waitLoop never ran because sess.start() never ran). The fix calls
+	// pty.Wait() synchronously to reap.
+	f := newFixture(t)
+
+	inSpawn := make(chan struct{})
+	releaseSpawn := make(chan struct{})
+	spawnedPTY := make(chan *fakePTY, 1)
+	f.spawner.make = func(tt *testing.T, req SpawnRequest) (*fakePTY, error) {
+		close(inSpawn)
+		<-releaseSpawn
+		p := newFakePTY(tt, req.Cols, req.Rows)
+		// Allow Wait() to return immediately once Close fires its waitDone.
+		spawnedPTY <- p
+		return p, nil
+	}
+
+	openDone := make(chan error, 1)
+	go func() {
+		_, err := f.mgr.Open(context.Background(), OpenParams{TaskID: "task-1", WorkspaceID: "ws-A"})
+		openDone <- err
+	}()
+
+	// Wait until Open is parked inside the spawner, then close the manager
+	// with zero registered sessions. Open will lose the race when it
+	// reacquires the mu after the spawn returns.
+	<-inSpawn
+	f.mgr.Close()
+
+	// Let the spawn finish; Open should now hit the closed-manager cleanup
+	// path: pty.Close + pty.Wait + return ErrManagerClosed.
+	close(releaseSpawn)
+
+	select {
+	case err := <-openDone:
+		if !errors.Is(err, ErrManagerClosed) {
+			t.Fatalf("Open after Close = %v, want ErrManagerClosed", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Open did not return after Manager.Close + spawn release")
+	}
+
+	pty := <-spawnedPTY
+	if got := pty.waitCount.Load(); got < 1 {
+		t.Fatalf("pty.Wait() called %d times in cleanup path, want >=1 — child not reaped", got)
 	}
 }
 
