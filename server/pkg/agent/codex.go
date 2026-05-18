@@ -857,6 +857,12 @@ func (c *codexClient) handleEvent(msg map[string]any) {
 				Input:  map[string]any{"command": command},
 			})
 		}
+	case "exec_command_output_delta":
+		// Legacy peer of item/commandExecution/outputDelta. Refresh the
+		// watchdog so long-running streaming commands don't get flagged as
+		// stuck. We don't emit a Message here — raw v2 doesn't either.
+		callID, _ := msg["call_id"].(string)
+		c.recordExecProgress(callID)
 	case "exec_command_end":
 		callID, _ := msg["call_id"].(string)
 		output, _ := msg["output"].(string)

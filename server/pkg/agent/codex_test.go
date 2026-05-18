@@ -295,6 +295,50 @@ func TestCodexLegacyEventExecCommand(t *testing.T) {
 	}
 }
 
+// TestCodexLegacyEventOutputDeltaResetsExecProgress confirms that the
+// legacy exec_command_output_delta event refreshes openExec[callID].
+// LastProgressAt so the watchdog won't flag a long-running streaming
+// command as stuck. The raw v2 path covers item/commandExecution/outputDelta
+// — this is the legacy peer.
+func TestCodexLegacyEventOutputDeltaResetsExecProgress(t *testing.T) {
+	t.Parallel()
+
+	c, _, _ := newTestCodexClient(t)
+
+	c.handleLine(`{"jsonrpc":"2.0","method":"codex/event","params":{"msg":{"type":"exec_command_begin","call_id":"c1","command":"long task"}}}`)
+
+	c.execMu.Lock()
+	startInfo, ok := c.openExec["c1"]
+	c.execMu.Unlock()
+	if !ok {
+		t.Fatal("expected openExec entry after exec_command_begin")
+	}
+
+	// Wait long enough that a delta-driven refresh is observable.
+	time.Sleep(20 * time.Millisecond)
+
+	c.handleLine(`{"jsonrpc":"2.0","method":"codex/event","params":{"msg":{"type":"exec_command_output_delta","call_id":"c1","stream":"stdout","chunk":"tick"}}}`)
+
+	c.execMu.Lock()
+	progressedInfo, ok := c.openExec["c1"]
+	c.execMu.Unlock()
+	if !ok {
+		t.Fatal("openExec entry should still be present after output_delta")
+	}
+	if !progressedInfo.LastProgressAt.After(startInfo.LastProgressAt) {
+		t.Fatalf("expected LastProgressAt to advance after output_delta, got start=%s progressed=%s", startInfo.LastProgressAt, progressedInfo.LastProgressAt)
+	}
+
+	c.handleLine(`{"jsonrpc":"2.0","method":"codex/event","params":{"msg":{"type":"exec_command_end","call_id":"c1","output":"done"}}}`)
+
+	c.execMu.Lock()
+	_, stillOpen := c.openExec["c1"]
+	c.execMu.Unlock()
+	if stillOpen {
+		t.Fatal("openExec entry should be cleared after exec_command_end")
+	}
+}
+
 func TestCodexLegacyEventTaskComplete(t *testing.T) {
 	t.Parallel()
 
