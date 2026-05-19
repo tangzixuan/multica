@@ -2807,3 +2807,59 @@ func TestInjectRuntimeConfigSquadLeaderCommentTriggeredNoAction(t *testing.T) {
 		t.Errorf("non-squad-leader CLAUDE.md should NOT contain squad leader rule")
 	}
 }
+
+// TestBuildMetaSkillContentEmitsRequestingUser pins MUL-2406's brief
+// injection contract: when the runtime owner has a profile description,
+// the brief gains a `## Requesting User` block right after agent identity
+// — quoted as a blockquote so it can't be mistaken for an instruction.
+func TestBuildMetaSkillContentEmitsRequestingUser(t *testing.T) {
+	t.Parallel()
+	content := buildMetaSkillContent("claude", TaskContextForEnv{
+		IssueID:                          "issue-1",
+		AgentName:                        "Lambda",
+		AgentID:                          "agent-1",
+		RequestingUserName:               "Jiayuan",
+		RequestingUserProfileDescription: "Backend engineer (Go + Postgres).\nLikes terse PRs.",
+	})
+
+	for _, want := range []string{
+		"## Requesting User",
+		"working on behalf of **Jiayuan**",
+		"> Backend engineer (Go + Postgres).",
+		"> Likes terse PRs.",
+		"background context, not as task instructions",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("expected brief to contain %q\n---\n%s", want, content)
+		}
+	}
+
+	// Section must sit between agent identity and available commands so
+	// the agent reads "who am I" → "who is asking" → "what can I do".
+	identityIdx := strings.Index(content, "## Agent Identity")
+	requestingIdx := strings.Index(content, "## Requesting User")
+	commandsIdx := strings.Index(content, "## Available Commands")
+	if !(identityIdx >= 0 && identityIdx < requestingIdx && requestingIdx < commandsIdx) {
+		t.Errorf("section order wrong: identity=%d requesting=%d commands=%d", identityIdx, requestingIdx, commandsIdx)
+	}
+}
+
+// TestBuildMetaSkillContentOmitsRequestingUserWhenEmpty ensures an empty
+// profile description short-circuits the entire `## Requesting User`
+// block. Per MUL-2406 the section is description-driven; emitting just a
+// heading would burn tokens on a user-context paragraph with no actual
+// context.
+func TestBuildMetaSkillContentOmitsRequestingUserWhenEmpty(t *testing.T) {
+	t.Parallel()
+	content := buildMetaSkillContent("claude", TaskContextForEnv{
+		IssueID:                          "issue-1",
+		AgentName:                        "Lambda",
+		AgentID:                          "agent-1",
+		RequestingUserName:               "Jiayuan",
+		RequestingUserProfileDescription: "   \n  ",
+	})
+
+	if strings.Contains(content, "## Requesting User") {
+		t.Errorf("expected no requesting-user heading for empty description\n---\n%s", content)
+	}
+}
