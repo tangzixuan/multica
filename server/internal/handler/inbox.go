@@ -29,7 +29,7 @@ const (
 // these to pick the right predicate for precise cache updates (RFC v4 §1).
 const (
 	inboxBatchOpArchiveAll       = "archive_all"
-	inboxBatchOpArchiveAllRead   = "archive_all_read"
+	inboxBatchOpArchiveRead      = "archive_read"
 	inboxBatchOpArchiveCompleted = "archive_completed"
 )
 
@@ -374,7 +374,7 @@ func (h *Handler) ArchiveAllInbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ArchiveAllReadInbox(w http.ResponseWriter, r *http.Request) {
-	h.archiveAllInboxOp(w, r, inboxBatchOpArchiveAllRead)
+	h.archiveAllInboxOp(w, r, inboxBatchOpArchiveRead)
 }
 
 func (h *Handler) ArchiveCompletedInbox(w http.ResponseWriter, r *http.Request) {
@@ -411,7 +411,7 @@ func (h *Handler) archiveAllInboxOp(w http.ResponseWriter, r *http.Request, oper
 			UserID:      parseUUID(userID),
 			Scopes:      scopes,
 		})
-	case inboxBatchOpArchiveAllRead:
+	case inboxBatchOpArchiveRead:
 		count, err = h.Queries.ArchiveAllReadInbox(r.Context(), db.ArchiveAllReadInboxParams{
 			WorkspaceID: wsUUID,
 			UserID:      parseUUID(userID),

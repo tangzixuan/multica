@@ -75,5 +75,5 @@ export interface InboxResourceAvailability {
  */
 export type InboxBatchArchiveOperation =
   | "archive_all"
-  | "archive_all_read"
+  | "archive_read"
   | "archive_completed";
