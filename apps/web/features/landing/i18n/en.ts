@@ -291,17 +291,16 @@ export function createEnDict(allowSignup: boolean): LandingDict {
         changes: [],
         features: [
           "Projects now have a Gantt view for scheduled work, with updates that stay in sync as plans change",
-          "Workspace admins can change the issue key prefix from settings, and the CLI can switch between workspaces and show the current workspace",
+          "Workspace admins can change the issue key prefix from settings",
+          "The CLI can switch between workspaces and show the current workspace",
           "Agents can read issue threads from the most recent discussion first, making follow-up work easier to route and review",
           "Usage now includes a one-day view plus weekly trends that respect the selected timezone",
-          "Agent detail pages show a compact task list with issue search for faster workload review",
+          "Agent detail pages now work as an issue board for that specific agent",
         ],
         improvements: [
           "The onboarding flow now asks one focused question at a time and can guide runtime setup with fewer manual steps",
-          "Adding a computer is simpler, with clearer choices and less setup friction",
           "My Issues now includes squad-assigned work and labels the team-related tab more clearly",
-          "Agent transcripts can be sorted in either direction when reviewing a run",
-          "Project timelines now focus on scheduled items and update live when related work changes",
+          "Agent execution logs can be sorted in either direction when reviewing a run",
         ],
         fixes: [
           "HTML previews open more predictably from desktop, close the full-screen modal when needed, and support in-page links",

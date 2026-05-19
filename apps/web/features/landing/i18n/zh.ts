@@ -291,17 +291,16 @@ export function createZhDict(allowSignup: boolean): LandingDict {
         changes: [],
         features: [
           "项目现在提供甘特图视图，用于查看有排期的工作，并会在计划变化时实时同步",
-          "Workspace 管理员可以在设置中调整 Issue 编号前缀，命令行也能切换 workspace 并查看当前 workspace",
+          "Workspace 管理员可以在设置中调整 Issue 编号前缀",
+          "命令行可以切换 workspace 并查看当前 workspace",
           "Agent 现在可以优先读取最新的 Issue 讨论线程，后续跟进和审查更贴近当前上下文",
           "Usage 新增 1 天视图和按周趋势，并会遵循所选时区",
-          "Agent 详情页新增紧凑任务列表和 Issue 搜索，查看工作负载更快",
+          "Agent 详情页现在是对应智能体的 Issue 看板",
         ],
         improvements: [
           "Onboarding 改为一次回答一个问题，并能用更少步骤引导 runtime 设置",
-          "添加电脑的流程更简单，选项更清楚，准备本地运行环境更省心",
-          "My Issues 会包含分配给 squad 的工作，相关标签也更容易理解",
-          "查看 agent transcript 时可以切换排序方向，回看运行过程更方便",
-          "项目时间线现在聚焦有排期的事项，相关工作变化时会自动更新",
+          "My Issues 会包含分配给小队的工作，相关标签也更容易理解",
+          "查看智能体执行日志时可以切换排序方向，回看运行过程更方便",
         ],
         fixes: [
           "桌面端打开 HTML 预览更稳定，必要时会关闭全屏窗口，并支持页面内链接跳转",
