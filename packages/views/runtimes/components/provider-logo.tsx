@@ -126,34 +126,76 @@ function KimiLogo({ className }: { className: string }) {
   );
 }
 
-// Gemini (Google) — official 4-point "spark" mark with Google's current
-// multicolor AI gradient (cyan → blue → purple → pink → orange) used on
-// gemini.google.com and the Gemini mobile app.
+// Gemini (Google) — official 4-point "spark" mark with the current
+// gemini.google.com / Gemini app "aurora" multicolor treatment: Google's
+// red / yellow / green / blue brand palette anchored at the four spark
+// points over a blue base. Approximated with four overlapping radial
+// gradients (the official asset embeds a raster JPEG, which would balloon
+// this inline SVG icon — see PR #2904 for the tradeoff).
 function GeminiLogo({ className }: { className: string }) {
-  const gradientId = `gemini-logo-gradient-${useId().replace(/:/g, "")}`;
+  const uid = useId().replace(/:/g, "");
+  const clipId = `gemini-clip-${uid}`;
+  const blueId = `gemini-blue-${uid}`;
+  const redId = `gemini-red-${uid}`;
+  const yellowId = `gemini-yellow-${uid}`;
+  const greenId = `gemini-green-${uid}`;
+  const sparkPath =
+    "M12 24A14.304 14.304 0 0 0 0 12 14.304 14.304 0 0 0 12 0a14.305 14.305 0 0 0 12 12 14.305 14.305 0 0 0-12 12Z";
 
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className}>
       <defs>
-        <linearGradient
-          id={gradientId}
-          x1="0"
-          y1="12"
-          x2="24"
-          y2="12"
+        <clipPath id={clipId}>
+          <path d={sparkPath} />
+        </clipPath>
+        <radialGradient
+          id={blueId}
+          cx="20"
+          cy="12"
+          r="18"
           gradientUnits="userSpaceOnUse"
         >
-          <stop offset="0" stopColor="#1BA1E3" />
-          <stop offset="0.3" stopColor="#5489D6" />
-          <stop offset="0.55" stopColor="#9B72CB" />
-          <stop offset="0.8" stopColor="#D96570" />
-          <stop offset="1" stopColor="#F49C46" />
-        </linearGradient>
+          <stop offset="0" stopColor="#4285F4" />
+          <stop offset="1" stopColor="#4285F4" stopOpacity="0" />
+        </radialGradient>
+        <radialGradient
+          id={redId}
+          cx="12"
+          cy="3"
+          r="13"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop offset="0" stopColor="#EA4335" />
+          <stop offset="1" stopColor="#EA4335" stopOpacity="0" />
+        </radialGradient>
+        <radialGradient
+          id={yellowId}
+          cx="12"
+          cy="21"
+          r="13"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop offset="0" stopColor="#FBBC04" />
+          <stop offset="1" stopColor="#FBBC04" stopOpacity="0" />
+        </radialGradient>
+        <radialGradient
+          id={greenId}
+          cx="3"
+          cy="12"
+          r="13"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop offset="0" stopColor="#34A853" />
+          <stop offset="1" stopColor="#34A853" stopOpacity="0" />
+        </radialGradient>
       </defs>
-      <path
-        d="M12 24A14.304 14.304 0 0 0 0 12 14.304 14.304 0 0 0 12 0a14.305 14.305 0 0 0 12 12 14.305 14.305 0 0 0-12 12Z"
-        fill={`url(#${gradientId})`}
-      />
+      <g clipPath={`url(#${clipId})`}>
+        <rect width="24" height="24" fill="#1A73E8" />
+        <rect width="24" height="24" fill={`url(#${blueId})`} />
+        <rect width="24" height="24" fill={`url(#${redId})`} />
+        <rect width="24" height="24" fill={`url(#${yellowId})`} />
+        <rect width="24" height="24" fill={`url(#${greenId})`} />
+      </g>
     </svg>
   );
 }
