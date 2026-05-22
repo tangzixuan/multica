@@ -73,7 +73,7 @@ describe("TitleEditor", () => {
     );
   });
 
-  it("does not overwrite the user's in-flight edits when the editor is focused", () => {
+  it("does not overwrite the user's in-flight edits when the editor is focused and dirty", () => {
     editorState.text = "old title";
     const { rerender } = render(<TitleEditor defaultValue="old title" />);
 
@@ -83,6 +83,36 @@ describe("TitleEditor", () => {
     rerender(<TitleEditor defaultValue="external update" />);
 
     expect(mockSetContent).not.toHaveBeenCalled();
+  });
+
+  // Regression: a focused but clean editor (user clicked in but never typed)
+  // must still accept external updates, otherwise the subsequent blur would
+  // compare stale editor text to the new server value and silently roll the
+  // external update back.
+  it("syncs to new defaultValue when editor is focused but clean", () => {
+    editorState.text = "old title";
+    const { rerender } = render(<TitleEditor defaultValue="old title" />);
+
+    // User clicked into the title field but has not typed anything yet:
+    // editor text still equals the previous defaultValue.
+    editorState.isFocused = true;
+    editorState.text = "old title";
+
+    rerender(<TitleEditor defaultValue="new title from server" />);
+
+    expect(mockSetContent).toHaveBeenCalledTimes(1);
+    expect(mockSetContent).toHaveBeenCalledWith(
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "new title from server" }],
+          },
+        ],
+      },
+      { emitUpdate: false },
+    );
   });
 
   it("short-circuits when editor text already equals incoming defaultValue", () => {

@@ -132,6 +132,11 @@ const TitleEditor = forwardRef<TitleEditorRef, TitleEditorProps>(
       return undefined;
     }, [autoFocus, editor]);
 
+    // Track the last `defaultValue` we've reconciled against, so we can tell
+    // "focused + dirty" (user typed something that diverges from external)
+    // apart from "focused + clean" (user just clicked in without typing).
+    const lastDefaultValueRef = useRef(defaultValue);
+
     // Sync external `defaultValue` changes into the editor.
     // Tiptap `useEditor` consumes `content` only at mount, so a WS-driven
     // title update would otherwise leave the editor showing stale text — and
@@ -139,9 +144,19 @@ const TitleEditor = forwardRef<TitleEditorRef, TitleEditorProps>(
     // value-vs-issue.title compare.
     useEffect(() => {
       if (!editor || editor.isDestroyed) return;
-      // User is typing — preserve in-flight edits.
-      if (editor.isFocused) return;
+      const prevDefaultValue = lastDefaultValueRef.current;
+      lastDefaultValueRef.current = defaultValue;
+
+      // Already in sync — nothing to do.
       if (editor.getText() === defaultValue) return;
+
+      // Focused + dirty: editor text diverges from the previous external
+      // value, meaning the user has typed in this session. Preserve input.
+      // Focused + clean (text still equals prev defaultValue) falls through
+      // so we accept the new external value instead of letting the next blur
+      // roll it back.
+      if (editor.isFocused && editor.getText() !== prevDefaultValue) return;
+
       editor.commands.setContent(
         defaultValue
           ? {
