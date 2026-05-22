@@ -326,11 +326,12 @@ func TestChildDoneMentionsParentAssignee_Agent(t *testing.T) {
 	}
 }
 
-// TestChildDoneMentionsParentAssignee_Member verifies the member branch:
-// the system comment carries a `mention://member/<member-id>` link and an
-// inbox row of type 'mentioned' is created for the member's user_id (NOT
-// the member_id — inbox.recipient_id is the underlying user).
-func TestChildDoneMentionsParentAssignee_Member(t *testing.T) {
+// TestChildDoneSkippedWhenParentMember verifies the MUL-2538 follow-up: a
+// human parent assignee should NOT receive the platform-generated system
+// comment at all. Humans read their own timeline manually; the automated
+// notification is pure noise and skipping it also removes the question of
+// whether to mention/inbox-row the member.
+func TestChildDoneSkippedWhenParentMember(t *testing.T) {
 	fx := newChildDoneFixture(t, "in_progress")
 
 	var memberID, userID string
@@ -348,13 +349,11 @@ func TestChildDoneMentionsParentAssignee_Member(t *testing.T) {
 
 	updateChildStatus(t, fx.child.ID, "done")
 
-	content := parentSystemCommentContent(t, fx.parent.ID)
-	wantMention := "mention://member/" + memberID
-	if !strings.Contains(content, wantMention) {
-		t.Errorf("expected %q in system comment, got: %s", wantMention, content)
+	if got := countSystemCommentsOn(t, fx.parent.ID); got != 0 {
+		t.Errorf("parent with member assignee should not receive a system comment, got %d", got)
 	}
-	if got := countInboxItems(t, userID, fx.parent.ID); got != 1 {
-		t.Errorf("expected 1 inbox row for parent member assignee, got %d", got)
+	if got := countInboxItems(t, userID, fx.parent.ID); got != 0 {
+		t.Errorf("parent with member assignee should not receive an inbox row, got %d", got)
 	}
 }
 

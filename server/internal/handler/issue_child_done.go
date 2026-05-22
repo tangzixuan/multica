@@ -2,14 +2,12 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -28,18 +26,24 @@ import (
 //   - issue.ParentIssueID must be set
 //   - parent must not be "done" or "cancelled" — the parent is already
 //     closed and a notification has no follow-up to drive
+//   - parent assignee must not be a member (human). Humans read their
+//     issues manually; an automated system comment is pure noise for them
+//     and there is nothing to "trigger" on a human assignee. Skipping the
+//     comment entirely (Bohan's call on MUL-2538) also sidesteps the
+//     mention question — no comment, no mention, no inbox row.
 //
 // The comment is inserted directly via db.Queries (not through the
 // CreateComment HTTP handler) so it bypasses the generic on_comment trigger
-// path. When the parent has an assignee, the comment body embeds a single
-// `mention://{member,agent,squad}/<id>` link that targets the parent
-// assignee — Bohan's product call on MUL-2538 ("system child-done comment
-// 无脑 mention parent assignee，member/squad/agent 都覆盖"). To keep the
-// platform in control of side effects, the cmd/server notification + subscriber
+// path. When the parent has an agent or squad assignee, the comment body
+// embeds a single `mention://{agent,squad}/<id>` link that targets the
+// parent assignee — Bohan's product call on MUL-2538 ("system child-done
+// comment 无脑 mention parent assignee，member/squad/agent 都覆盖", later
+// narrowed to skip member assignees outright). To keep the platform in
+// control of side effects, the cmd/server notification + subscriber
 // listeners still skip system comments wholesale, so smuggled mentions from
 // the child title cannot light up unrelated members. The parent assignee's
-// own trigger / inbox row is fired explicitly by dispatchParentAssigneeTrigger
-// below, with the loop and idempotency guards documented there.
+// own trigger is fired explicitly by dispatchParentAssigneeTrigger below,
+// with the loop and idempotency guards documented there.
 //
 // Errors are logged at warn level and swallowed: this is a best-effort
 // notification on the side of a successful status update; failing it must
@@ -60,6 +64,12 @@ func (h *Handler) notifyParentOfChildDone(ctx context.Context, prev, issue db.Is
 		return
 	}
 	if parent.Status == "done" || parent.Status == "cancelled" {
+		return
+	}
+	// Human-assigned parents read their own timeline; an automated system
+	// comment is just noise and there is no agent task to trigger. Skip the
+	// whole notification (comment + mention + inbox row) — MUL-2538.
+	if parent.AssigneeType.Valid && parent.AssigneeType.String == "member" {
 		return
 	}
 
@@ -172,18 +182,6 @@ func (h *Handler) resolveAssigneeMentionLabel(ctx context.Context, workspaceID p
 			return "", false
 		}
 		return sanitizeMentionLabel(squad.Name), true
-	case "member":
-		member, err := h.Queries.GetMember(ctx, assigneeID)
-		if err != nil {
-			return "", false
-		}
-		user, err := h.Queries.GetUser(ctx, member.UserID)
-		if err != nil {
-			// Member row exists but the user record is missing — fall back
-			// to a generic label rather than dropping the mention entirely.
-			return "member", true
-		}
-		return sanitizeMentionLabel(user.Name), true
 	}
 	return "", false
 }
@@ -203,19 +201,18 @@ func sanitizeMentionLabel(name string) string {
 
 // dispatchParentAssigneeTrigger fires the explicit side effect that pairs
 // with the @mention link in the system comment body — an agent task for
-// agent / squad-leader assignees, an inbox row for member assignees. The
-// generic comment listener is intentionally bypassed (it short-circuits on
+// agent or squad-leader assignees. Member assignees never reach this code
+// path; notifyParentOfChildDone skips them outright. The generic comment
+// listener is intentionally bypassed (it short-circuits on
 // author_type='system'), so this is the single place where the platform
 // applies loop and idempotency guards for the child-done notification.
 //
 // Guards applied here:
 //   - No-op when the parent has no assignee row.
-//   - Loop guard: skip when the parent assignee is the same entity that
-//     "owns" the child (same agent id for agent/squad-leader assignees, or
-//     same member id for member assignees). Without this an agent that
-//     drives both child and parent immediately re-runs on the parent and
-//     can post another child, looping; a member who flips their own
-//     child's status receives a self-notification they did not ask for.
+//   - Loop guard: skip when the parent assignee is the same agent that
+//     "owns" the child. Without this an agent that drives both child and
+//     parent immediately re-runs on the parent and can post another
+//     child, looping.
 //   - Idempotency: HasPendingTaskForIssueAndAgent dedupes rapid-fire enqueues
 //     for the same parent (e.g. two children finishing back-to-back).
 //   - Readiness: archived agents / missing runtimes are silently skipped
@@ -230,8 +227,6 @@ func (h *Handler) dispatchParentAssigneeTrigger(ctx context.Context, parent, chi
 		h.triggerChildDoneAgent(ctx, parent, child, systemComment.ID)
 	case "squad":
 		h.triggerChildDoneSquad(ctx, parent, child, systemComment.ID)
-	case "member":
-		h.triggerChildDoneMember(ctx, parent, child, systemComment)
 	}
 }
 
@@ -313,88 +308,6 @@ func (h *Handler) triggerChildDoneSquad(ctx context.Context, parent, child db.Is
 	}
 }
 
-// triggerChildDoneMember creates a "mentioned"-type inbox row for the
-// parent's member assignee so it surfaces in their inbox the same way an
-// explicit @mention from a human comment would. The generic comment-mention
-// listener does not run on system comments (see notification_listeners.go),
-// so this is where the personal feed actually gets populated.
-func (h *Handler) triggerChildDoneMember(ctx context.Context, parent, child db.Issue, systemComment db.Comment) {
-	if childAssigneeIsMember(child, parent.AssigneeID) {
-		return
-	}
-
-	member, err := h.Queries.GetMember(ctx, parent.AssigneeID)
-	if err != nil {
-		return
-	}
-	recipientUserID := member.UserID
-	if !recipientUserID.Valid {
-		return
-	}
-
-	details, _ := json.Marshal(map[string]string{
-		"comment_id": uuidToString(systemComment.ID),
-	})
-
-	item, err := h.Queries.CreateInboxItem(ctx, db.CreateInboxItemParams{
-		WorkspaceID:   parent.WorkspaceID,
-		RecipientType: "member",
-		RecipientID:   recipientUserID,
-		Type:          "mentioned",
-		Severity:      "info",
-		IssueID:       parent.ID,
-		Title:         parent.Title,
-		Body:          pgtype.Text{String: systemComment.Content, Valid: true},
-		ActorType:     pgtype.Text{String: "system", Valid: true},
-		ActorID:       pgtype.UUID{},
-		Details:       details,
-	})
-	if err != nil {
-		slog.Warn("child done: create parent member inbox failed",
-			"error", err,
-			"parent_id", uuidToString(parent.ID),
-			"member_id", uuidToString(parent.AssigneeID))
-		return
-	}
-
-	h.Bus.Publish(events.Event{
-		Type:        protocol.EventInboxNew,
-		WorkspaceID: uuidToString(parent.WorkspaceID),
-		ActorType:   "system",
-		ActorID:     "",
-		Payload: map[string]any{
-			"item": childDoneInboxItemPayload(item, parent.Status),
-		},
-	})
-}
-
-// childDoneInboxItemPayload mirrors the shape of inboxItemToResponse in
-// cmd/server/notification_listeners.go so frontend clients can read the
-// platform-generated row through the same path they read mention rows. We
-// avoid importing the cmd/server package (handler → cmd would be a cycle)
-// and instead inline the minimal set of fields the WS consumers care about.
-func childDoneInboxItemPayload(item db.InboxItem, issueStatus string) map[string]any {
-	resp := map[string]any{
-		"id":             uuidToString(item.ID),
-		"workspace_id":   uuidToString(item.WorkspaceID),
-		"recipient_type": item.RecipientType,
-		"recipient_id":   uuidToString(item.RecipientID),
-		"type":           item.Type,
-		"severity":       item.Severity,
-		"issue_id":       uuidToPtr(item.IssueID),
-		"title":          item.Title,
-		"body":           textToPtr(item.Body),
-		"read":           item.Read,
-		"archived":       item.Archived,
-		"created_at":     timestampToString(item.CreatedAt),
-		"actor_type":     textToPtr(item.ActorType),
-		"actor_id":       uuidToPtr(item.ActorID),
-		"details":        json.RawMessage(item.Details),
-		"issue_status":   issueStatus,
-	}
-	return resp
-}
-
 func childAssigneeIsAgent(child db.Issue, agentID pgtype.UUID) bool {
 	if !child.AssigneeType.Valid || child.AssigneeType.String != "agent" || !child.AssigneeID.Valid {
 		return false
@@ -407,11 +320,4 @@ func childAssigneeIsSquad(child db.Issue, squadID pgtype.UUID) bool {
 		return false
 	}
 	return uuidToString(child.AssigneeID) == uuidToString(squadID)
-}
-
-func childAssigneeIsMember(child db.Issue, memberID pgtype.UUID) bool {
-	if !child.AssigneeType.Valid || child.AssigneeType.String != "member" || !child.AssigneeID.Valid {
-		return false
-	}
-	return uuidToString(child.AssigneeID) == uuidToString(memberID)
 }
