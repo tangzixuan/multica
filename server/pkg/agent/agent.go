@@ -46,13 +46,16 @@ type ExecOptions struct {
 	ThinkingLevel string
 	// SkillsLocal opts the runtime into ("merge") or out of ("ignore") the
 	// host machine's user-global skill directory. Honoured by the Claude
-	// backend: "merge" (platform default — anything other than "ignore")
-	// preserves the inherit-from-machine behavior so the CLI walks
-	// `~/.claude/` directly; "ignore" redirects CLAUDE_CONFIG_DIR to an
-	// isolated per-task scratch dir so the CLI never reads
-	// `~/.claude/skills/` (used to harden shared agents against broken
-	// host skills — GitHub #3052). Codex already isolates via CODEX_HOME
-	// and ignores this option; other backends ignore it as well (no-op).
+	// backend in this package — "merge" (platform default; anything other
+	// than "ignore") preserves the inherit-from-machine behavior so the
+	// CLI walks `~/.claude/` directly, and "ignore" redirects
+	// CLAUDE_CONFIG_DIR to an isolated per-task scratch dir so the CLI
+	// never reads `~/.claude/skills/` (used to harden shared agents
+	// against broken host skills — GitHub #3052). Codex enforces the same
+	// contract one layer up in the daemon: `execenv.hydrateCodexSkills`
+	// skips the `~/.codex/skills/` seed when this value is "ignore", so
+	// the per-task CODEX_HOME exposes only workspace skills. Other
+	// backends ignore this option today (no-op).
 	SkillsLocal string
 }
 

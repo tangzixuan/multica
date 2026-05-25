@@ -103,8 +103,12 @@ type AgentData struct {
 	// preserves the inherit-from-machine behavior; "ignore" hides the
 	// directory from the runtime so a broken local skill cannot crash a
 	// shared agent (#3052). Old servers that predate the column omit this
-	// field entirely; the daemon treats empty as "merge" — see
-	// ExecOptions.SkillsLocal.
+	// field entirely; the daemon treats empty as "merge". Currently
+	// honoured by Claude (via CLAUDE_CONFIG_DIR scratch mirroring in
+	// server/pkg/agent/claude.go) and Codex (via the user-skill seed gate
+	// in server/internal/daemon/execenv/execenv.go); other runtimes leave
+	// HOME untouched and natively discover user-level skills, so the
+	// toggle is a no-op for them.
 	SkillsLocal string `json:"skills_local,omitempty"`
 }
 
