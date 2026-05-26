@@ -151,20 +151,21 @@ ORDER BY pr.pr_created_at DESC;
 SELECT issue_id FROM issue_pull_request
 WHERE pull_request_id = $1;
 
--- name: GetSiblingPullRequestStateCountsForIssue :one
--- Returns, for the PRs linked to an issue excluding one PR by id (the PR
--- currently being processed by the webhook handler), how many are still in
--- flight (open or draft) and how many have already merged. The webhook
--- handler combines these with the current event's state to decide whether
--- to auto-advance the issue: the issue moves to done only when there is no
--- in-flight sibling AND at least one linked PR (current or sibling) merged.
+-- name: GetIssuePullRequestCloseAggregate :one
+-- Aggregates the issue's linked PRs into the two counts that gate
+-- auto-advance: how many are still in flight (`open` or `draft`) and how
+-- many merged PRs declared explicit closing intent on the link row. The
+-- webhook auto-advances the issue when open_count = 0 AND
+-- merged_with_close_intent_count > 0. Both the PR state and the link row
+-- (with close_intent) are persisted before this query runs, so the result
+-- is event-agnostic — a link-only sibling closing after a closing-keyword
+-- PR has already merged still resolves the issue.
 SELECT
     COALESCE(SUM(CASE WHEN pr.state IN ('open', 'draft') THEN 1 ELSE 0 END), 0)::bigint AS open_count,
-    COALESCE(SUM(CASE WHEN pr.state = 'merged' THEN 1 ELSE 0 END), 0)::bigint AS merged_count
+    COALESCE(SUM(CASE WHEN pr.state = 'merged' AND ipr.close_intent THEN 1 ELSE 0 END), 0)::bigint AS merged_with_close_intent_count
 FROM github_pull_request pr
 JOIN issue_pull_request ipr ON ipr.pull_request_id = pr.id
-WHERE ipr.issue_id = $1
-  AND pr.id <> $2;
+WHERE ipr.issue_id = $1;
 
 -- =====================
 -- GitHub PR check suite
@@ -195,12 +196,19 @@ WHERE EXCLUDED.updated_at >= github_pull_request_check_suite.updated_at;
 -- =====================
 
 -- name: LinkIssueToPullRequest :exec
+-- close_intent is monotonic: once a PR has been linked with closing intent
+-- (a "Closes/Fixes/Resolves" keyword in title or body), a later webhook
+-- re-fire for the same PR without the keyword (e.g. body was edited to
+-- drop the keyword after merge) must not clear the flag. The OR-merge in
+-- DO UPDATE keeps the strongest declaration that has ever applied to this
+-- link.
 INSERT INTO issue_pull_request (
-    issue_id, pull_request_id, linked_by_type, linked_by_id
+    issue_id, pull_request_id, linked_by_type, linked_by_id, close_intent
 ) VALUES (
-    $1, $2, sqlc.narg('linked_by_type'), sqlc.narg('linked_by_id')
+    $1, $2, sqlc.narg('linked_by_type'), sqlc.narg('linked_by_id'), $3
 )
-ON CONFLICT (issue_id, pull_request_id) DO NOTHING;
+ON CONFLICT (issue_id, pull_request_id) DO UPDATE SET
+    close_intent = issue_pull_request.close_intent OR EXCLUDED.close_intent;
 
 -- name: UnlinkIssueFromPullRequest :exec
 DELETE FROM issue_pull_request

@@ -996,6 +996,152 @@ func TestWebhook_MergedPR_BranchNameDoesNotClose(t *testing.T) {
 	}
 }
 
+// firePRWebhook fires a webhook for a single PR with caller-controlled
+// title, body, branch, and lifecycle (open / merged / closed without
+// merge). Tests below need the open→merged sequence so close_intent on
+// one PR has to persist across multiple webhook events for a sibling PR.
+func firePRWebhook(t *testing.T, secret string, installationID int64, prNumber int32, title, body, branch, lifecycle string) {
+	t.Helper()
+	var action, state string
+	var merged bool
+	var mergedAt, closedAt any
+	switch lifecycle {
+	case "opened":
+		action, state, merged = "opened", "open", false
+		mergedAt, closedAt = nil, nil
+	case "merged":
+		action, state, merged = "closed", "closed", true
+		mergedAt, closedAt = "2026-04-29T00:00:00Z", "2026-04-29T00:00:00Z"
+	case "closed":
+		action, state, merged = "closed", "closed", false
+		mergedAt, closedAt = nil, "2026-04-29T00:00:00Z"
+	default:
+		t.Fatalf("firePRWebhook: unknown lifecycle %q", lifecycle)
+	}
+	payload := map[string]any{
+		"action": action,
+		"pull_request": map[string]any{
+			"number":     prNumber,
+			"html_url":   fmt.Sprintf("https://github.com/acme/widget/pull/%d", prNumber),
+			"title":      title,
+			"body":       body,
+			"state":      state,
+			"draft":      false,
+			"merged":     merged,
+			"merged_at":  mergedAt,
+			"closed_at":  closedAt,
+			"created_at": "2026-04-28T00:00:00Z",
+			"updated_at": "2026-04-29T00:00:00Z",
+			"head":       map[string]any{"ref": branch},
+			"user":       map[string]any{"login": "octocat"},
+		},
+		"repository":   map[string]any{"name": "widget", "owner": map[string]any{"login": "acme"}},
+		"installation": map[string]any{"id": installationID},
+	}
+	raw, _ := json.Marshal(payload)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(raw)
+	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/webhooks/github", bytes.NewReader(raw))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-Hub-Signature-256", sig)
+	testHandler.HandleGitHubWebhook(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("webhook pr=%d (%s): expected 202, got %d (%s)", prNumber, lifecycle, rec.Code, rec.Body.String())
+	}
+}
+
+// TestWebhook_LinkOnlySiblingMergeAfterCloseKeywordPR is the regression
+// guard for the multi-PR sibling case Elon flagged on the first attempt
+// of this fix. Scenario:
+//
+//  1. PR A declares closing intent (`Closes MUL-X`) and is opened.
+//  2. PR B references the same issue (link-only — no closing keyword)
+//     and is opened.
+//  3. PR A merges. The issue stays in_progress because PR B is open.
+//  4. PR B merges later. PR B's webhook has no closing keyword, so the
+//     previous implementation skipped re-evaluating the issue and the
+//     issue stayed stuck in_progress forever.
+//
+// The persisted close_intent column on issue_pull_request fixes this:
+// the aggregate sees PR A's merged+close_intent row regardless of which
+// webhook drives the re-evaluation, so PR B's merge advances the issue.
+func TestWebhook_LinkOnlySiblingMergeAfterCloseKeywordPR(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture not initialized (no DB?)")
+	}
+	ctx := context.Background()
+	secret := "link-only-sibling-secret"
+	t.Setenv("GITHUB_WEBHOOK_SECRET", secret)
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":  "needs two prs",
+		"status": "in_progress",
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue: %d %s", w.Code, w.Body.String())
+	}
+	var created IssueResponse
+	json.NewDecoder(w.Body).Decode(&created)
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM issue_pull_request WHERE issue_id = $1`, created.ID)
+		testPool.Exec(ctx, `DELETE FROM activity_log WHERE issue_id = $1`, created.ID)
+		testPool.Exec(ctx, `DELETE FROM github_pull_request WHERE workspace_id = $1`, testWorkspaceID)
+		testPool.Exec(ctx, `DELETE FROM github_installation WHERE workspace_id = $1`, testWorkspaceID)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, created.ID)
+	})
+
+	const installationID int64 = 30264004
+	if _, err := testHandler.Queries.CreateGitHubInstallation(ctx, db.CreateGitHubInstallationParams{
+		WorkspaceID:    parseUUID(testWorkspaceID),
+		InstallationID: installationID,
+		AccountLogin:   "link-only-sibling-acct",
+		AccountType:    "User",
+	}); err != nil {
+		t.Fatalf("CreateGitHubInstallation: %v", err)
+	}
+
+	// 1) PR A opens with closing intent.
+	firePRWebhook(t, secret, installationID, 1, "Implement primary path", "Closes "+created.Identifier, "feat/primary", "opened")
+	// 2) PR B opens link-only — title prefix mention, no closing keyword.
+	firePRWebhook(t, secret, installationID, 2, created.Identifier+": follow-up cleanup", "", "feat/cleanup", "opened")
+
+	// Sanity: issue is still in_progress (both PRs open).
+	got, err := testHandler.Queries.GetIssue(ctx, parseUUID(created.ID))
+	if err != nil {
+		t.Fatalf("GetIssue after open: %v", err)
+	}
+	if got.Status != "in_progress" {
+		t.Fatalf("after both PRs opened: status = %q, want in_progress", got.Status)
+	}
+
+	// 3) PR A merges. PR B still open → issue stays in_progress.
+	firePRWebhook(t, secret, installationID, 1, "Implement primary path", "Closes "+created.Identifier, "feat/primary", "merged")
+	got, err = testHandler.Queries.GetIssue(ctx, parseUUID(created.ID))
+	if err != nil {
+		t.Fatalf("GetIssue after A merge: %v", err)
+	}
+	if got.Status != "in_progress" {
+		t.Fatalf("after PR A merged with PR B still open: status = %q, want in_progress", got.Status)
+	}
+
+	// 4) PR B merges (link-only, no closing keyword). The persisted
+	// close_intent on PR A's link must still carry the advance.
+	firePRWebhook(t, secret, installationID, 2, created.Identifier+": follow-up cleanup", "", "feat/cleanup", "merged")
+	got, err = testHandler.Queries.GetIssue(ctx, parseUUID(created.ID))
+	if err != nil {
+		t.Fatalf("GetIssue after B merge: %v", err)
+	}
+	if got.Status != "done" {
+		t.Errorf("after both PRs merged (A with close_intent, B link-only): status = %q, want done", got.Status)
+	}
+}
+
 // ── CI / mergeable_state tests ─────────────────────────────────────────────
 
 func TestDerivePRMergeableState(t *testing.T) {

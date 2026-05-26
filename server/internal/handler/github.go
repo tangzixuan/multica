@@ -714,7 +714,8 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, body []byte) {
 
 	// Auto-link: scan title/body/branch for issue identifiers, look them
 	// up in this workspace, attach the link rows. Idempotent (ON CONFLICT
-	// DO NOTHING) so re-firing the webhook doesn't duplicate.
+	// upserts the close_intent flag — see LinkIssueToPullRequest) so
+	// re-firing the webhook doesn't duplicate.
 	//
 	// RFC MUL-2414 §4.8: the PR mirror upsert above always runs (so re-enabling
 	// GitHub features restores history without backfill), but the link rows
@@ -727,57 +728,70 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, body []byte) {
 		// closingIdents is the subset of identifiers that this PR explicitly
 		// declared via a closing keyword ("Closes/Fixes/Resolves MUL-X").
 		// Linking still happens for every mention (idents above), but the
-		// auto-advance-to-done gate below only fires for keyword-declared
-		// identifiers — bare title prefixes and branch-name references are
-		// link-only.
+		// link row's close_intent column — and therefore whether the
+		// auto-advance gate eventually fires — is only set for keyword-
+		// declared identifiers. Bare title prefixes and branch-name
+		// references are link-only.
 		closingIdents := map[string]struct{}{}
 		for _, c := range extractClosingIdentifiers(p.PullRequest.Title, p.PullRequest.Body) {
 			closingIdents[c] = struct{}{}
 		}
 		prefix := h.getIssuePrefix(ctx, inst.WorkspaceID)
+		// reevalIssues collects each issue whose link row we just touched so
+		// we can re-run the auto-advance gate against the persisted aggregate
+		// after every link upsert in this event. Driving the gate off
+		// persisted state (instead of "did *this* webhook declare closing
+		// intent?") is what fixes the multi-PR sibling case: a PR with
+		// `Closes MUL-1` merges first while a link-only sibling is still
+		// open, then the sibling closes later — its webhook has no closing
+		// keyword, but the earlier link row carries close_intent=true, so
+		// MUL-1 still advances.
+		reevalIssues := make([]db.Issue, 0, len(idents))
 		for _, id := range idents {
 			issue, ok := h.lookupIssueByIdentifier(ctx, inst.WorkspaceID, prefix, id)
 			if !ok {
 				continue
 			}
+			_, declared := closingIdents[id]
 			if err := h.Queries.LinkIssueToPullRequest(ctx, db.LinkIssueToPullRequestParams{
-				IssueID:        issue.ID,
-				PullRequestID:  pr.ID,
-				LinkedByType:   strToText("system"),
-				LinkedByID:     pgtype.UUID{},
+				IssueID:       issue.ID,
+				PullRequestID: pr.ID,
+				CloseIntent:   declared,
+				LinkedByType:  strToText("system"),
+				LinkedByID:    pgtype.UUID{},
 			}); err != nil {
 				slog.Warn("github: link failed", "err", err)
 				continue
 			}
 			linkedIssueIDs = append(linkedIssueIDs, uuidToString(issue.ID))
+			reevalIssues = append(reevalIssues, issue)
+		}
 
-			// A terminal PR event (`merged` or `closed`) may be the moment the
-			// last in-flight sibling resolves, so we re-evaluate the issue on
-			// both. We advance the issue to done when:
-			//   1. this PR explicitly declared closing intent for the issue
-			//      (closing keyword in title/body — see closingIdents above);
-			//   2. the issue isn't already terminal (`done` / `cancelled`);
-			//   3. no sibling PR is still `open` / `draft`;
-			//   4. at least one linked PR (this one or a sibling) is `merged`.
-			// Rule (1) is what prevents "Follow up in MUL-2" / "Unblocks MUL-3"
-			// references from being treated the same as "Closes MUL-1". Rule
-			// (4) prevents an "all closed-without-merge" sequence from
-			// silently auto-closing the issue — if nothing was ever
-			// delivered, the user should decide what to do manually.
-			if _, declared := closingIdents[id]; !declared {
-				continue
-			}
-			if (state == "merged" || state == "closed") && issue.Status != "done" && issue.Status != "cancelled" {
-				counts, err := h.Queries.GetSiblingPullRequestStateCountsForIssue(ctx, db.GetSiblingPullRequestStateCountsForIssueParams{
-					IssueID: issue.ID,
-					ID:      pr.ID,
-				})
-				if err != nil {
-					slog.Warn("github: count sibling pr states failed", "err", err, "issue_id", uuidToString(issue.ID))
+		// A terminal PR event (`merged` or `closed`) may be the moment the
+		// last in-flight sibling resolves. We re-evaluate every issue we
+		// just linked once both the PR row and the link row are persisted,
+		// so the aggregate query sees the freshest state. We advance the
+		// issue to done when:
+		//   1. the issue isn't already terminal (`done` / `cancelled`);
+		//   2. no linked PR is still `open` / `draft`;
+		//   3. at least one merged linked PR declared close_intent (a
+		//      "Closes/Fixes/Resolves" keyword on its link row).
+		// Rule (3) is what prevents "Follow up in MUL-2" / "Unblocks MUL-3"
+		// references from being treated the same as "Closes MUL-1", and
+		// also prevents an "all closed-without-merge" sequence from
+		// silently auto-closing the issue — if nothing carrying closing
+		// intent was ever delivered, the user should decide manually.
+		if state == "merged" || state == "closed" {
+			for _, issue := range reevalIssues {
+				if issue.Status == "done" || issue.Status == "cancelled" {
 					continue
 				}
-				anyMerged := state == "merged" || counts.MergedCount > 0
-				if counts.OpenCount == 0 && anyMerged {
+				counts, err := h.Queries.GetIssuePullRequestCloseAggregate(ctx, issue.ID)
+				if err != nil {
+					slog.Warn("github: count linked pr states failed", "err", err, "issue_id", uuidToString(issue.ID))
+					continue
+				}
+				if counts.OpenCount == 0 && counts.MergedWithCloseIntentCount > 0 {
 					h.advanceIssueToDone(ctx, issue, workspaceID)
 				}
 			}
