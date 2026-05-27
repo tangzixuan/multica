@@ -344,10 +344,10 @@ function CommentRow({
         </Tooltip>
 
         <div className="ml-auto flex items-center gap-0.5">
-            <QuickEmojiPicker
-              onSelect={(emoji) => onToggleReaction(entry.id, emoji)}
-              align="end"
-            />
+          <QuickEmojiPicker
+            onSelect={(emoji) => onToggleReaction(entry.id, emoji)}
+            align="end"
+          />
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
@@ -389,7 +389,7 @@ function CommentRow({
             onOpenChange={setConfirmDelete}
             onConfirm={() => onDelete(entry.id)}
           />
-          </div>
+        </div>
       </div>
 
       {editing ? (

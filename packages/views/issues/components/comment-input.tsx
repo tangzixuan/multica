@@ -79,9 +79,9 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
     setSubmitting(true);
     editorRef.current?.clearContent();
     setIsEmpty(true);
-    setPendingAttachments([]);
     try {
       await onSubmit(content, activeIds.length > 0 ? activeIds : undefined);
+      setPendingAttachments([]);
       clearDraft(draftKey);
     } finally {
       setSubmitting(false);

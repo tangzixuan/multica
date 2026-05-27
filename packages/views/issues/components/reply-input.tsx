@@ -98,9 +98,9 @@ function ReplyInput({
     setSubmitting(true);
     editorRef.current?.clearContent();
     setIsEmpty(true);
-    setPendingAttachments([]);
     try {
       await onSubmit(content, activeIds.length > 0 ? activeIds : undefined);
+      setPendingAttachments([]);
       if (draftKey) clearDraft(draftKey);
     } finally {
       setSubmitting(false);
