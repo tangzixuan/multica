@@ -85,7 +85,8 @@ export function MyIssuesPage() {
     [isAllScope, viewApiParams],
   );
 
-  // Build the filter for myIssueListOptions
+  // My Issues resolves {me} client-side (unlike Issues page where the server does it)
+  // because the "All" scope fires 3 parallel requests with different param names.
   const filter: MyIssuesFilter = useMemo(() => {
     if (!user) return {};
     if (isAllScope) return {};

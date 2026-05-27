@@ -18,6 +18,7 @@ type SavedViewResponse struct {
 	Page        string          `json:"page"`
 	ProjectID   *string         `json:"project_id"`
 	Filters     json.RawMessage `json:"filters"`
+	Display     json.RawMessage `json:"display"`
 	Position    float64         `json:"position"`
 	Shared      bool            `json:"shared"`
 	IsDefault   bool            `json:"is_default"`
@@ -30,6 +31,10 @@ func savedViewToResponse(v db.SavedView) SavedViewResponse {
 	if len(filters) == 0 {
 		filters = json.RawMessage("{}")
 	}
+	display := json.RawMessage(v.Display)
+	if len(display) == 0 {
+		display = json.RawMessage("{}")
+	}
 	return SavedViewResponse{
 		ID:          uuidToString(v.ID),
 		WorkspaceID: uuidToString(v.WorkspaceID),
@@ -38,6 +43,7 @@ func savedViewToResponse(v db.SavedView) SavedViewResponse {
 		Page:        v.Page,
 		ProjectID:   uuidToPtr(v.ProjectID),
 		Filters:     filters,
+		Display:     display,
 		Position:    v.Position,
 		Shared:      v.Shared,
 		IsDefault:   v.IsDefault,
@@ -51,12 +57,14 @@ type CreateViewRequest struct {
 	Page      string          `json:"page"`
 	ProjectID *string         `json:"project_id"`
 	Filters   json.RawMessage `json:"filters"`
+	Display   json.RawMessage `json:"display"`
 	Shared    bool            `json:"shared"`
 }
 
 type UpdateViewRequest struct {
 	Name    *string          `json:"name"`
 	Filters *json.RawMessage `json:"filters"`
+	Display *json.RawMessage `json:"display"`
 	Shared  *bool            `json:"shared"`
 }
 
@@ -140,15 +148,26 @@ func (h *Handler) ListViews(w http.ResponseWriter, r *http.Request) {
 		params.ProjectID = pid
 	}
 
-	// Lazy-create default views on first access (ON CONFLICT DO NOTHING).
+	// Lazy-create default views. On first access (zero rows) seed ALL presets.
+	// On subsequent calls only ensure is_default=true views exist — non-default
+	// presets (Members, Agents, etc.) are not re-inserted so users can delete them.
 	if defs, ok := defaultViewsByPage[page]; ok {
+		count, _ := h.Queries.CountSavedViews(r.Context(), db.CountSavedViewsParams{
+			WorkspaceID: wsUUID,
+			Page:        page,
+			ProjectID:   params.ProjectID,
+		})
 		for _, d := range defs {
+			if count > 0 && !d.IsDefault {
+				continue
+			}
 			_ = h.Queries.EnsureDefaultViews(r.Context(), db.EnsureDefaultViewsParams{
 				WorkspaceID: wsUUID,
 				Name:        d.Name,
 				Page:        page,
 				ProjectID:   params.ProjectID,
 				Filters:     json.RawMessage(d.Filters),
+				Display:     json.RawMessage("{}"),
 				Position:    d.Position,
 				IsDefault:   d.IsDefault,
 			})
@@ -210,6 +229,14 @@ func (h *Handler) CreateView(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "filters must be valid JSON")
 		return
 	}
+	display := req.Display
+	if len(display) == 0 {
+		display = json.RawMessage("{}")
+	}
+	if !json.Valid(display) {
+		writeError(w, http.StatusBadRequest, "display must be valid JSON")
+		return
+	}
 
 	params := db.CreateSavedViewParams{
 		WorkspaceID: wsUUID,
@@ -217,6 +244,7 @@ func (h *Handler) CreateView(w http.ResponseWriter, r *http.Request) {
 		Name:        req.Name,
 		Page:        req.Page,
 		Filters:     filters,
+		Display:     display,
 		Shared:      req.Shared,
 		IsDefault:   false,
 	}
@@ -310,6 +338,13 @@ func (h *Handler) UpdateView(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		params.Filters = *req.Filters
+	}
+	if req.Display != nil {
+		if !json.Valid(*req.Display) {
+			writeError(w, http.StatusBadRequest, "display must be valid JSON")
+			return
+		}
+		params.Display = *req.Display
 	}
 	if req.Shared != nil {
 		params.Shared = pgtype.Bool{Bool: *req.Shared, Valid: true}

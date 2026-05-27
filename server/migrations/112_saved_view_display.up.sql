@@ -1,0 +1,1 @@
+ALTER TABLE saved_view ADD COLUMN display JSONB NOT NULL DEFAULT '{}';

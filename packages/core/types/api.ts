@@ -224,6 +224,7 @@ export interface SavedView {
   page: "issues" | "my_issues" | "project";
   project_id: string | null;
   filters: Record<string, unknown>;
+  display: Record<string, unknown>;
   position: number;
   shared: boolean;
   is_default: boolean;
@@ -241,13 +242,14 @@ export interface CreateViewRequest {
   page: "issues" | "my_issues" | "project";
   project_id?: string;
   filters?: Record<string, unknown>;
+  display?: Record<string, unknown>;
   shared?: boolean;
 }
 
 export interface UpdateViewRequest {
   name?: string;
   filters?: Record<string, unknown>;
-  position?: number;
+  display?: Record<string, unknown>;
   shared?: boolean;
 }
 

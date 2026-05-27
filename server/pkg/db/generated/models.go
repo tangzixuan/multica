@@ -483,6 +483,7 @@ type SavedView struct {
 	IsDefault   bool               `json:"is_default"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	Display     []byte             `json:"display"`
 }
 
 type Skill struct {

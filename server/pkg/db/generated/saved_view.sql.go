@@ -11,10 +11,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countSavedViews = `-- name: CountSavedViews :one
+SELECT COUNT(*)::int AS count FROM saved_view
+WHERE workspace_id = $1 AND page = $2
+  AND ($3::uuid IS NULL OR project_id = $3)
+`
+
+type CountSavedViewsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Page        string      `json:"page"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+}
+
+func (q *Queries) CountSavedViews(ctx context.Context, arg CountSavedViewsParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countSavedViews, arg.WorkspaceID, arg.Page, arg.ProjectID)
+	var count int32
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createSavedView = `-- name: CreateSavedView :one
-INSERT INTO saved_view (workspace_id, creator_id, name, page, project_id, filters, position, shared, is_default)
-VALUES ($1, $2, $3, $4, $9, $5, $6, $7, $8)
-RETURNING id, workspace_id, creator_id, name, page, project_id, filters, position, shared, is_default, created_at, updated_at
+INSERT INTO saved_view (workspace_id, creator_id, name, page, project_id, filters, display, position, shared, is_default)
+VALUES ($1, $2, $3, $4, $10, $5, $6, $7, $8, $9)
+RETURNING id, workspace_id, creator_id, name, page, project_id, filters, position, shared, is_default, created_at, updated_at, display
 `
 
 type CreateSavedViewParams struct {
@@ -23,6 +42,7 @@ type CreateSavedViewParams struct {
 	Name        string      `json:"name"`
 	Page        string      `json:"page"`
 	Filters     []byte      `json:"filters"`
+	Display     []byte      `json:"display"`
 	Position    float64     `json:"position"`
 	Shared      bool        `json:"shared"`
 	IsDefault   bool        `json:"is_default"`
@@ -36,6 +56,7 @@ func (q *Queries) CreateSavedView(ctx context.Context, arg CreateSavedViewParams
 		arg.Name,
 		arg.Page,
 		arg.Filters,
+		arg.Display,
 		arg.Position,
 		arg.Shared,
 		arg.IsDefault,
@@ -55,6 +76,7 @@ func (q *Queries) CreateSavedView(ctx context.Context, arg CreateSavedViewParams
 		&i.IsDefault,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Display,
 	)
 	return i, err
 }
@@ -74,8 +96,8 @@ func (q *Queries) DeleteSavedView(ctx context.Context, arg DeleteSavedViewParams
 }
 
 const ensureDefaultViews = `-- name: EnsureDefaultViews :exec
-INSERT INTO saved_view (workspace_id, name, page, project_id, filters, position, shared, is_default)
-VALUES ($1, $2, $3, $7, $4, $5, true, $6)
+INSERT INTO saved_view (workspace_id, name, page, project_id, filters, display, position, shared, is_default)
+VALUES ($1, $2, $3, $8, $4, $5, $6, true, $7)
 ON CONFLICT DO NOTHING
 `
 
@@ -84,6 +106,7 @@ type EnsureDefaultViewsParams struct {
 	Name        string      `json:"name"`
 	Page        string      `json:"page"`
 	Filters     []byte      `json:"filters"`
+	Display     []byte      `json:"display"`
 	Position    float64     `json:"position"`
 	IsDefault   bool        `json:"is_default"`
 	ProjectID   pgtype.UUID `json:"project_id"`
@@ -97,6 +120,7 @@ func (q *Queries) EnsureDefaultViews(ctx context.Context, arg EnsureDefaultViews
 		arg.Name,
 		arg.Page,
 		arg.Filters,
+		arg.Display,
 		arg.Position,
 		arg.IsDefault,
 		arg.ProjectID,
@@ -125,7 +149,7 @@ func (q *Queries) GetMaxSavedViewPosition(ctx context.Context, arg GetMaxSavedVi
 }
 
 const getSavedView = `-- name: GetSavedView :one
-SELECT id, workspace_id, creator_id, name, page, project_id, filters, position, shared, is_default, created_at, updated_at FROM saved_view
+SELECT id, workspace_id, creator_id, name, page, project_id, filters, position, shared, is_default, created_at, updated_at, display FROM saved_view
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -150,12 +174,13 @@ func (q *Queries) GetSavedView(ctx context.Context, arg GetSavedViewParams) (Sav
 		&i.IsDefault,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Display,
 	)
 	return i, err
 }
 
 const listSavedViews = `-- name: ListSavedViews :many
-SELECT id, workspace_id, creator_id, name, page, project_id, filters, position, shared, is_default, created_at, updated_at FROM saved_view
+SELECT id, workspace_id, creator_id, name, page, project_id, filters, position, shared, is_default, created_at, updated_at, display FROM saved_view
 WHERE workspace_id = $1 AND page = $2
   AND ($3::uuid IS NULL OR project_id = $3)
 ORDER BY position ASC, created_at ASC
@@ -191,6 +216,7 @@ func (q *Queries) ListSavedViews(ctx context.Context, arg ListSavedViewsParams) 
 			&i.IsDefault,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Display,
 		); err != nil {
 			return nil, err
 		}
@@ -206,10 +232,11 @@ const updateSavedView = `-- name: UpdateSavedView :one
 UPDATE saved_view SET
     name = COALESCE($3, name),
     filters = COALESCE($4, filters),
-    shared = COALESCE($5, shared),
+    display = COALESCE($5, display),
+    shared = COALESCE($6, shared),
     updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, creator_id, name, page, project_id, filters, position, shared, is_default, created_at, updated_at
+RETURNING id, workspace_id, creator_id, name, page, project_id, filters, position, shared, is_default, created_at, updated_at, display
 `
 
 type UpdateSavedViewParams struct {
@@ -217,6 +244,7 @@ type UpdateSavedViewParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 	Name        pgtype.Text `json:"name"`
 	Filters     []byte      `json:"filters"`
+	Display     []byte      `json:"display"`
 	Shared      pgtype.Bool `json:"shared"`
 }
 
@@ -226,6 +254,7 @@ func (q *Queries) UpdateSavedView(ctx context.Context, arg UpdateSavedViewParams
 		arg.WorkspaceID,
 		arg.Name,
 		arg.Filters,
+		arg.Display,
 		arg.Shared,
 	)
 	var i SavedView
@@ -242,6 +271,7 @@ func (q *Queries) UpdateSavedView(ctx context.Context, arg UpdateSavedViewParams
 		&i.IsDefault,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Display,
 	)
 	return i, err
 }
