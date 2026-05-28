@@ -213,7 +213,11 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if e, ok := probe("MULTICA_KIRO_PATH", "kiro-cli", "MULTICA_KIRO_MODEL"); ok {
 		agents["kiro"] = e
 	}
-	if e, ok := probe("MULTICA_ANTIGRAVITY_PATH", "agy", "MULTICA_ANTIGRAVITY_MODEL"); ok {
+	// Antigravity has no `--model` flag and ModelSelectionSupported returns
+	// false for it (see server/pkg/agent/models.go). Pass an empty modelEnv
+	// so we don't seed AgentEntry.Model from an environment variable that
+	// the backend would silently ignore, and don't lead users to set it.
+	if e, ok := probe("MULTICA_ANTIGRAVITY_PATH", "agy", ""); ok {
 		agents["antigravity"] = e
 	}
 	if len(agents) == 0 {

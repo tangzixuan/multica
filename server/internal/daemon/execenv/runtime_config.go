@@ -98,7 +98,7 @@ func formatProjectResource(r ProjectResourceForEnv) string {
 // For Cursor:   writes {workDir}/AGENTS.md  (skills discovered natively from .cursor/skills/)
 // For Kimi:        writes {workDir}/AGENTS.md  (Kimi Code CLI reads AGENTS.md natively; skills auto-discovered from project skills dirs)
 // For Kiro:        writes {workDir}/AGENTS.md  (Kiro CLI reads AGENTS.md natively; skills auto-discovered from project skills dirs)
-// For Antigravity: writes {workDir}/AGENTS.md  (agy CLI reads AGENTS.md natively; skills use the .agent_context/skills/ fallback — no dedicated native path)
+// For Antigravity: writes {workDir}/AGENTS.md  (agy CLI reads AGENTS.md natively; skills discovered natively from .agents/skills/ — see https://antigravity.google/docs/gcli-migration)
 func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (string, error) {
 	content := buildMetaSkillContent(provider, ctx)
 
@@ -403,18 +403,19 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		case "claude":
 			// Claude discovers skills natively from .claude/skills/ — just list names.
 			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
-		case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro":
-			// Codex, Copilot, OpenCode, OpenClaw, Pi, Cursor, Kimi, and Kiro discover skills
-			// natively from their respective paths. For OpenClaw, the daemon also writes a
-			// per-task openclaw-config.json (exported via OPENCLAW_CONFIG_PATH) that pins
-			// agents.defaults.workspace to the task workdir so the CLI's scanner picks up
-			// {workDir}/skills/.
+		case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity":
+			// Codex, Copilot, OpenCode, OpenClaw, Pi, Cursor, Kimi, Kiro, and
+			// Antigravity discover skills natively from their respective paths.
+			// For OpenClaw, the daemon also writes a per-task openclaw-config.json
+			// (exported via OPENCLAW_CONFIG_PATH) that pins agents.defaults.workspace
+			// to the task workdir so the CLI's scanner picks up {workDir}/skills/.
+			// Antigravity inherits Gemini CLI's workspace skill layout —
+			// {workDir}/.agents/skills/ — see resolveSkillsDir.
 			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
-		case "gemini", "hermes", "antigravity":
-			// Gemini reads GEMINI.md directly. Hermes and Antigravity have no
-			// native skills discovery path wired up in resolveSkillsDir; all
-			// three fall back to referencing the files explicitly under
-			// .agent_context/skills/.
+		case "gemini", "hermes":
+			// Gemini reads GEMINI.md directly. Hermes has no native skill
+			// discovery path wired up in resolveSkillsDir; both fall back to
+			// referencing the files explicitly under .agent_context/skills/.
 			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
 		default:
 			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
