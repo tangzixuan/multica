@@ -18,7 +18,7 @@ multica login
 브라우저가 자동으로 열립니다. 웹 앱에서 승인하면 CLI가 PAT(`mul_` 접두사)를 `~/.multica/config.json`에 저장합니다. 이후 모든 명령은 이 PAT로 인증됩니다.
 
 <Callout type="tip">
-CI나 headless 환경에서는 브라우저 플로우를 건너뛰세요. 웹 앱의 **Settings → Personal Access Tokens**에서 PAT를 만든 뒤 `multica login --token <mul_...>`로 직접 전달하면 됩니다.
+CI나 headless 환경에서는 브라우저 플로우를 건너뛰세요. 웹 앱의 **설정 → API 토큰**에서 PAT를 만든 뒤 `multica login --token <mul_...>`로 직접 전달하면 됩니다.
 </Callout>
 
 토큰 유형 간의 차이는 [인증과 토큰](/auth-tokens)을 참고하세요.

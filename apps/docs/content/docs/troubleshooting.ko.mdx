@@ -176,11 +176,11 @@ docker exec <container> env | grep -E 'APP_ENV|MULTICA_DEV_VERIFICATION_CODE'
 
 ## 사용량 대시보드가 0으로 유지됨
 
-**증상**: 에이전트가 작업을 완료하고 원시 토큰 사용량이 데이터베이스에 기록되지만, **Settings → Usage**와 **Settings → Runtime**에서 입력 / 출력 / 비용이 전부 0으로 표시됩니다. 이것은 조용히 발생하는 현상으로 — 백엔드 로그에 오류가 없습니다.
+**증상**: 에이전트가 작업을 완료하고 원시 토큰 사용량이 데이터베이스에 기록되지만, **설정 → 사용량**과 **설정 → 런타임**에서 입력 / 출력 / 비용이 전부 0으로 표시됩니다. 이것은 조용히 발생하는 현상으로 — 백엔드 로그에 오류가 없습니다.
 
 **가능한 원인**:
 
-1. **`rollup_task_usage_hourly()`가 전혀 스케줄링되지 않음** — Usage / Runtime 대시보드는 파생 테이블 `task_usage_hourly`에서 읽으며, 이 테이블은 해당 함수로 채워집니다. 번들된 `pgvector/pgvector:pg17` 이미지에는 `pg_cron`이 포함되어 있지 않으며, 백엔드도 프로세스 내에서 rollup을 실행하지 않습니다. 외부 스케줄러 없이 새로 설치한 자체 호스팅에서는 이것이 기본 상태입니다.
+1. **`rollup_task_usage_hourly()`가 전혀 스케줄링되지 않음** — 사용량 / 런타임 대시보드는 파생 테이블 `task_usage_hourly`에서 읽으며, 이 테이블은 해당 함수로 채워집니다. 번들된 `pgvector/pgvector:pg17` 이미지에는 `pg_cron`이 포함되어 있지 않으며, 백엔드도 프로세스 내에서 rollup을 실행하지 않습니다. 외부 스케줄러 없이 새로 설치한 자체 호스팅에서는 이것이 기본 상태입니다.
 2. **`pg_cron`이 설치되었지만 잘못된 데이터베이스를 가리킴** — `pg_cron.database_name`의 기본값은 `postgres`입니다. Multica 데이터베이스 이름이 다르면 스케줄된 작업이 `rollup_task_usage_hourly()`를 전혀 보지 못합니다.
 3. **스케줄러는 실행되지만 rollup이 조용히 오류를 냄** — 예를 들어 cron 항목 내부의 DB 역할 / search_path가 잘못됨.
 
