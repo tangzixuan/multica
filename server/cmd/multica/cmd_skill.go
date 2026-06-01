@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/daemon"
 )
 
 var skillCmd = &cobra.Command{
@@ -110,6 +111,7 @@ func init() {
 	skillCreateCmd.Flags().String("description", "", "Skill description")
 	skillCreateCmd.Flags().String("content", "", "Skill content (SKILL.md body)")
 	skillCreateCmd.Flags().String("config", "", "Skill config as JSON string")
+	skillCreateCmd.Flags().String("bundle-dir", "", "Local skill bundle directory containing SKILL.md")
 	skillCreateCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// skill update
@@ -117,6 +119,7 @@ func init() {
 	skillUpdateCmd.Flags().String("description", "", "New description")
 	skillUpdateCmd.Flags().String("content", "", "New content")
 	skillUpdateCmd.Flags().String("config", "", "New config as JSON string")
+	skillUpdateCmd.Flags().String("bundle-dir", "", "Local skill bundle directory containing SKILL.md; replaces supporting files")
 	skillUpdateCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// skill delete
@@ -208,18 +211,24 @@ func runSkillCreate(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	name, _ := cmd.Flags().GetString("name")
-	if name == "" {
-		return fmt.Errorf("--name is required")
+	body := map[string]any{}
+	if err := applySkillBundleFlags(cmd, body); err != nil {
+		return err
 	}
 
-	body := map[string]any{
-		"name": name,
+	name, _ := cmd.Flags().GetString("name")
+	if cmd.Flags().Changed("name") {
+		body["name"] = name
 	}
-	if v, _ := cmd.Flags().GetString("description"); v != "" {
+	if strVal(body, "name") == "" {
+		return fmt.Errorf("--name is required unless --bundle-dir SKILL.md has frontmatter name")
+	}
+	if cmd.Flags().Changed("description") {
+		v, _ := cmd.Flags().GetString("description")
 		body["description"] = v
 	}
-	if v, _ := cmd.Flags().GetString("content"); v != "" {
+	if cmd.Flags().Changed("content") {
+		v, _ := cmd.Flags().GetString("content")
 		body["content"] = v
 	}
 	if cmd.Flags().Changed("config") {
@@ -255,6 +264,9 @@ func runSkillUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	body := map[string]any{}
+	if err := applySkillBundleFlags(cmd, body); err != nil {
+		return err
+	}
 	if cmd.Flags().Changed("name") {
 		v, _ := cmd.Flags().GetString("name")
 		body["name"] = v
@@ -277,7 +289,7 @@ func runSkillUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(body) == 0 {
-		return fmt.Errorf("no fields to update; use --name, --description, --content, or --config")
+		return fmt.Errorf("no fields to update; use --name, --description, --content, --config, or --bundle-dir")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -294,6 +306,22 @@ func runSkillUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Skill updated: %s (%s)\n", strVal(result, "name"), strVal(result, "id"))
+	return nil
+}
+
+func applySkillBundleFlags(cmd *cobra.Command, body map[string]any) error {
+	bundleDir, _ := cmd.Flags().GetString("bundle-dir")
+	if bundleDir == "" {
+		return nil
+	}
+	bundle, err := daemon.LoadSkillBundleFromDir(bundleDir)
+	if err != nil {
+		return fmt.Errorf("read --bundle-dir: %w", err)
+	}
+	body["name"] = bundle.Name
+	body["description"] = bundle.Description
+	body["content"] = bundle.Content
+	body["files"] = bundle.Files
 	return nil
 }
 

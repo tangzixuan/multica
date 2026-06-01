@@ -38,6 +38,18 @@ type runtimeLocalSkillBundle struct {
 	Files       []SkillFileData `json:"files,omitempty"`
 }
 
+// SkillBundle is a local skill directory ready to send to the API. It mirrors
+// the runtime-local import payload but is provider-neutral so the CLI can use
+// the same SKILL.md parsing and supporting-file collection as daemons.
+type SkillBundle struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Content     string          `json:"content"`
+	SourcePath  string          `json:"source_path"`
+	Provider    string          `json:"provider,omitempty"`
+	Files       []SkillFileData `json:"files,omitempty"`
+}
+
 // localSkillRootForProvider tracks the user-level skill locations exposed by
 // each runtime/provider. Keep these in sync with upstream docs / conventions:
 //   - GitHub Copilot: https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills
@@ -243,6 +255,41 @@ func collectLocalSkillFiles(skillDir string, includeContent bool) ([]SkillFileDa
 		return files[i].Path < files[j].Path
 	})
 	return files, nil
+}
+
+// LoadSkillBundleFromDir reads a local skill bundle rooted at skillDir. The
+// bundle must contain SKILL.md; supporting files are every non-hidden file
+// below the directory except SKILL.md and license files.
+func LoadSkillBundleFromDir(skillDir string) (*SkillBundle, error) {
+	info, err := os.Stat(skillDir)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("skill bundle is not a directory")
+	}
+
+	content, err := readLocalSkillMainFile(skillDir)
+	if err != nil {
+		return nil, err
+	}
+	name, description := parseLocalSkillFrontmatter(content)
+	if name == "" {
+		name = filepath.Base(skillDir)
+	}
+
+	files, err := collectLocalSkillFiles(skillDir, true)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SkillBundle{
+		Name:        name,
+		Description: description,
+		Content:     content,
+		SourcePath:  filepath.ToSlash(skillDir),
+		Files:       files,
+	}, nil
 }
 
 func listRuntimeLocalSkills(provider string) ([]runtimeLocalSkillSummary, bool, error) {
