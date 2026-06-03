@@ -10,7 +10,12 @@ import (
 	"strings"
 )
 
-//go:embed templates/*.json
+// Embed the whole templates/ directory (not templates/*.json) so the build
+// still compiles when the catalog is empty: a *.json glob with zero matches is
+// a compile error, whereas the directory always contains templates/README.md.
+// loadFromFS only reads *.json, so the README is ignored at load time.
+//
+//go:embed templates
 var templateFS embed.FS
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -23,10 +28,11 @@ type Registry struct {
 	order  []string // slugs in deterministic load order, used by List()
 }
 
-// Load parses every *.json file under templates/ and returns a populated
-// Registry. Any malformed template (bad JSON, missing required fields,
-// slug/filename mismatch) aborts startup — we'd rather fail loudly at boot
-// than serve a half-broken picker.
+// Load parses every *.json file under templates/ and returns the Registry.
+// An empty catalog (no *.json files) is valid and yields an empty Registry.
+// Any malformed template (bad JSON, missing required fields, slug/filename
+// mismatch) aborts startup — we'd rather fail loudly at boot than serve a
+// half-broken picker.
 func Load() (*Registry, error) {
 	return loadFromFS(templateFS, "templates")
 }
