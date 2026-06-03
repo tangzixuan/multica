@@ -569,6 +569,7 @@ export function ChatWindow() {
         <ChatMessageSkeleton />
       ) : hasMessages ? (
         <ChatMessageList
+          key={activeSessionId}
           messages={messages}
           pendingTask={pendingTask}
           availability={availability}
