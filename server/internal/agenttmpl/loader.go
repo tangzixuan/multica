@@ -31,6 +31,15 @@ func Load() (*Registry, error) {
 	return loadFromFS(templateFS, "templates")
 }
 
+// LoadFromFS builds a Registry from an arbitrary filesystem, applying the same
+// parsing and validation as Load. It exists so packages outside agenttmpl
+// (notably handler tests) can stand up a Registry from an in-memory fstest.MapFS
+// instead of the embedded catalog, exercising the create-from-template flow
+// against controlled fixtures.
+func LoadFromFS(fsys fs.FS, dir string) (*Registry, error) {
+	return loadFromFS(fsys, dir)
+}
+
 func loadFromFS(fsys fs.FS, dir string) (*Registry, error) {
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
